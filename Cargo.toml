@@ -1,0 +1,21 @@
+[package]
+name = "firmware"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+cortex-m = "0.7.3"
+cortex-m-rt = { version = "0.6.15", features = ["device"] }
+panic-halt = "0.2.0"
+stm32f3xx-hal = { version = "0.8.1", features = ["ld", "rt", "stm32f303x8"] }
+
+[profile.dev]
+lto = "thin"
+opt-level = "s"
+
+[profile.release]
+debug = true
+lto = true
+opt-level = "s"
