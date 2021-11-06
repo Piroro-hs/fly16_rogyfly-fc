@@ -11,10 +11,11 @@ cortex-m = "0.7.3"
 cortex-m-rt = { version = "0.6.15", features = ["device"] }
 embedded-hal = { version = "0.2.6", features = ["unproven"] }
 panic-halt = "0.2.0"
+shared-bus = "0.2.2"
 stm32f3xx-hal = { version = "0.8.1", features = ["ld", "rt", "stm32f303x8"] }
 
 [profile.dev]
-lto = "thin"
+lto = true
 opt-level = "s"
 
 [profile.release]

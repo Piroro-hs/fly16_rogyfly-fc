@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+mod barometer;
 mod clock;
 mod delay;
 mod print;
@@ -52,6 +53,8 @@ fn main() -> ! {
 
     print::init(tx);
 
+    println!("Hello");
+
     let pin = gpioa.pa10.into_af7_push_pull(&mut gpioa.moder, &mut gpioa.otyper, &mut gpioa.afrh);
     let dma1 = dp.DMA1.split(&mut rcc.ahb);
     let mut sbus = sbus::Sbus::new(dp.USART1, pin, dma1.ch5, clocks, &mut rcc.apb2);
@@ -77,7 +80,10 @@ fn main() -> ! {
     sda.internal_pull_up(&mut gpiob.pupdr, true);
     let i2c = hal::i2c::I2c::new(dp.I2C1, (scl, sda), 400_000.Hz(), clocks, &mut rcc.apb1);
 
-    let mut imu = Bno055::new(i2c).with_alternative_address();
+    let bus = shared_bus::BusManagerSimple::new(i2c);
+
+    // let mut imu = Bno055::new(i2c).with_alternative_address();
+    let mut imu = Bno055::new(bus.acquire_i2c());
 
     imu.init(&mut delay).unwrap();
     imu.set_external_crystal(true, &mut delay).unwrap();
@@ -87,8 +93,25 @@ fn main() -> ! {
     //     sys_clock.wait();
     // }
 
+    let mut barometer = barometer::Barometer::new(bus.acquire_i2c(), &mut delay).unwrap();
+
+    const SAMPLE_NUM: usize = 10;
+    let acc = (0..SAMPLE_NUM)
+        .map(|_| {
+            delay.delay_ms(10);
+            barometer.pressure().unwrap()
+        })
+        .fold(
+            (0.0, f64::NEG_INFINITY, f64::INFINITY),
+            |(acc, max, min), cur| (acc + cur, max.max(cur), min.min(cur)),
+        );
+    let pressure_trimmed_mean = (acc.0 - (acc.1 + acc.2)) / (SAMPLE_NUM - 2) as f64;
+
+    delay.delay_ms(1000);
+
+    println!("Start");
+
     loop {
-        println!("Hello");
         if let Some(data) = sbus.latest() {
             const SERVO_PWM_OFFSET: u16 = (1.52 / 0.000625 - 1024.0) as u16;
             const AILERON_DIFF_RATIO: f32 = 0.6;
@@ -106,6 +129,10 @@ fn main() -> ! {
         }
         if let Ok(acc) = imu.linear_acceleration() {
             println!("Acceleration: {:?}", acc);
+        }
+        if let Ok(pressure) = barometer.pressure() {
+            let altitude = (pressure - pressure_trimmed_mean) * -8.344407986; // https://en.wikipedia.org/wiki/Pressure_altitude
+            println!("Altitude: {:?}", altitude);
         }
 
         sys_clock.wait();
