@@ -6,6 +6,7 @@ mod delay;
 mod print;
 mod sbus;
 
+use bno055::{Bno055, BNO055OperationMode};
 use cortex_m::asm;
 use cortex_m_rt::entry;
 #[cfg(not(debug_assertions))]
@@ -34,6 +35,8 @@ fn main() -> ! {
         .freeze(&mut flash.acr);
 
     let sys_clock = clock::SysClock::new(cp.SYST, clocks);
+
+    let mut delay = delay::Delay::new(cp.DWT, cp.DCB, clocks);
 
     let mut gpioa = dp.GPIOA.split(&mut rcc.ahb);
     let mut gpiob = dp.GPIOB.split(&mut rcc.ahb);
@@ -68,13 +71,29 @@ fn main() -> ! {
     throttle.enable();
     rudder.enable();
 
+    let mut scl = gpiob.pb6.into_af4_open_drain(&mut gpiob.moder, &mut gpiob.otyper, &mut gpiob.afrl);
+    let mut sda = gpiob.pb7.into_af4_open_drain(&mut gpiob.moder, &mut gpiob.otyper, &mut gpiob.afrl);
+    scl.internal_pull_up(&mut gpiob.pupdr, true);
+    sda.internal_pull_up(&mut gpiob.pupdr, true);
+    let i2c = hal::i2c::I2c::new(dp.I2C1, (scl, sda), 400_000.Hz(), clocks, &mut rcc.apb1);
+
+    let mut imu = Bno055::new(i2c).with_alternative_address();
+
+    imu.init(&mut delay).unwrap();
+    imu.set_external_crystal(true, &mut delay).unwrap();
+    // imu.set_axis_remap(AxisRemap::builder().swap_x_with(Axis::AXIS_AS_Z).build().unwrap()).unwrap();
+    imu.set_mode(BNO055OperationMode::IMU, &mut delay).unwrap();
+    // while !imu.is_fully_calibrated().unwrap() {
+    //     sys_clock.wait();
+    // }
+
     loop {
         println!("Hello");
         if let Some(data) = sbus.latest() {
             const SERVO_PWM_OFFSET: u16 = (1.52 / 0.000625 - 1024.0) as u16;
             const AILERON_DIFF_RATIO: f32 = 0.6;
 
-            println!("{:?}", data);
+            println!("S.BUS: {:?}", data);
             let a = (data.ch[0] as i16 - 1024) as f32;
             aileron_l.set_duty((1024 + (a * if a > 0.0 { 1.0 } else { AILERON_DIFF_RATIO }) as i16) as u16 + SERVO_PWM_OFFSET);
             aileron_r.set_duty((1024 + (a * if a < 0.0 { 1.0 } else { AILERON_DIFF_RATIO }) as i16) as u16 + SERVO_PWM_OFFSET);
@@ -82,6 +101,13 @@ fn main() -> ! {
             throttle.set_duty((data.ch[2] + SERVO_PWM_OFFSET) as u32);
             rudder.set_duty(data.ch[3] + SERVO_PWM_OFFSET);
         }
+        if let Ok(quat) = imu.quaternion() {
+            println!("Quaternion: {:?}", quat);
+        }
+        if let Ok(acc) = imu.linear_acceleration() {
+            println!("Acceleration: {:?}", acc);
+        }
+
         sys_clock.wait();
     }
 }
