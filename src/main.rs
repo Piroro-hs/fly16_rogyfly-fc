@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+mod clock;
 mod print;
 
 use cortex_m::asm;
@@ -15,6 +16,7 @@ use print::{print, println};
 fn main() -> ! {
     asm::delay(8_000 * 5); // Wait 5 ms for clock generator startup
 
+    let cp = pac::CorePeripherals::take().unwrap();
     let dp = pac::Peripherals::take().unwrap();
 
     let mut flash = dp.FLASH.constrain();
@@ -28,6 +30,8 @@ fn main() -> ! {
         .pclk1(36.MHz())
         .pclk2(72.MHz())
         .freeze(&mut flash.acr);
+
+    let sys_clock = clock::SysClock::new(cp.SYST, clocks);
 
     let mut gpioa = dp.GPIOA.split(&mut rcc.ahb);
     let mut gpiob = dp.GPIOB.split(&mut rcc.ahb);
@@ -45,7 +49,7 @@ fn main() -> ! {
 
     loop {
         println!("Hello");
-        asm::delay(72_000_000);
+        sys_clock.wait();
     }
 }
 
