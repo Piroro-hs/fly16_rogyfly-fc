@@ -92,9 +92,10 @@ fn main() -> ! {
     imu.set_external_crystal(true, &mut delay).unwrap();
     // imu.set_axis_remap(AxisRemap::builder().swap_x_with(Axis::AXIS_AS_Z).build().unwrap()).unwrap();
     imu.set_mode(BNO055OperationMode::IMU, &mut delay).unwrap();
-    // while !imu.is_fully_calibrated().unwrap() {
-    //     sys_clock.wait();
-    // }
+    delay.delay_ms(100); // BNO055 returns constant zero without this delay
+    imu.set_calibration_profile(BNO055Calibration::from_buf(
+        &[0xED, 0xFF, 0x0E, 0x00, 0x1E, 0x00, 0xED, 0xFF, 0x0E, 0x00, 0x1E, 0x00, 0xFE, 0xFF, 0x01, 0x00, 0xFF, 0xFF, 0xE8, 0x03, 0x68, 0x03]
+    ), &mut delay).unwrap();
 
     let mut barometer = barometer::Barometer::new(bus.acquire_i2c(), &mut delay).unwrap();
 
