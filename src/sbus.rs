@@ -10,7 +10,7 @@ const BUF_LEN: usize = u8::MAX as usize + 1;
 
 static mut BUFFER: [u8; BUF_LEN] = [0; BUF_LEN];
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct SbusPacket {
     pub ch: [u16; 16],
     pub ch17: bool,

@@ -6,6 +6,7 @@ mod clock;
 mod delay;
 mod print;
 mod sbus;
+mod t10j;
 
 use bno055::{Bno055, BNO055OperationMode};
 use cortex_m::asm;
@@ -57,9 +58,11 @@ fn main() -> ! {
 
     let pin = gpioa.pa10.into_af7_push_pull(&mut gpioa.moder, &mut gpioa.otyper, &mut gpioa.afrh);
     let dma1 = dp.DMA1.split(&mut rcc.ahb);
-    let mut sbus = sbus::Sbus::new(dp.USART1, pin, dma1.ch5, clocks, &mut rcc.apb2);
+    let sbus = sbus::Sbus::new(dp.USART1, pin, dma1.ch5, clocks, &mut rcc.apb2);
 
-    // Use timers on APB1 to avoid stm32f3xx-hal clock configure bug
+    let mut t10j = t10j::T10j::new(sbus, &mut delay);
+
+    // Use timers on APB1 to avoid stm32f3xx-hal clock configuration issue
     let (.., t2c4) = hal::pwm::tim2(dp.TIM2, 16000, 100.Hz(), &clocks);
     let (t3c1, t3c2, t3c3, t3c4) = hal::pwm::tim3(dp.TIM3, 16000, 100.Hz(), &clocks);
     let mut throttle = t2c4.output_to_pa3(gpioa.pa3.into_af1_push_pull(&mut gpioa.moder, &mut gpioa.otyper, &mut gpioa.afrl));
@@ -112,18 +115,20 @@ fn main() -> ! {
     println!("Start");
 
     loop {
-        if let Some(data) = sbus.latest() {
-            const SERVO_PWM_OFFSET: u16 = (1.52 / 0.000625 - 1024.0) as u16;
-            const AILERON_DIFF_RATIO: f32 = 0.6;
+        const SERVO_PWM_OFFSET: u16 = (1.52 / 0.000625 - 1024.0) as u16;
+        const AILERON_DIFF_RATIO: f32 = 0.6;
 
-            println!("S.BUS: {:?}", data);
-            let a = (data.ch[0] as i16 - 1024) as f32;
-            aileron_l.set_duty((1024 + (a * if a > 0.0 { 1.0 } else { AILERON_DIFF_RATIO }) as i16) as u16 + SERVO_PWM_OFFSET);
-            aileron_r.set_duty((1024 + (a * if a < 0.0 { 1.0 } else { AILERON_DIFF_RATIO }) as i16) as u16 + SERVO_PWM_OFFSET);
-            elevator.set_duty(data.ch[1] + SERVO_PWM_OFFSET);
-            throttle.set_duty((data.ch[2] + SERVO_PWM_OFFSET) as u32);
-            rudder.set_duty(data.ch[3] + SERVO_PWM_OFFSET);
-        }
+        t10j.update();
+        let state = t10j.state();
+        println!("S.BUS: {:?}", state.raw());
+
+        let a = (state.value(1) as i16 - 1024) as f32;
+        aileron_l.set_duty((1024 + (a * if a > 0.0 { 1.0 } else { AILERON_DIFF_RATIO }) as i16) as u16 + SERVO_PWM_OFFSET);
+        aileron_r.set_duty((1024 + (a * if a < 0.0 { 1.0 } else { AILERON_DIFF_RATIO }) as i16) as u16 + SERVO_PWM_OFFSET);
+        elevator.set_duty(state.value(2) + SERVO_PWM_OFFSET);
+        throttle.set_duty((state.value(3) + SERVO_PWM_OFFSET) as u32);
+        rudder.set_duty(state.value(4) + SERVO_PWM_OFFSET);
+
         if let Ok(quat) = imu.quaternion() {
             println!("Quaternion: {:?}", quat);
         }

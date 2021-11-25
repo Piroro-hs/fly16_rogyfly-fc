@@ -1,4 +1,7 @@
-use cortex_m::{asm, peripheral::{syst::SystClkSource, SYST}};
+use cortex_m::{
+    asm,
+    peripheral::{syst::SystClkSource, SYST},
+};
 use cortex_m_rt::exception;
 use stm32f3xx_hal::rcc::Clocks;
 
