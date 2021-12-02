@@ -30,9 +30,9 @@ impl Sbus {
     const BAUD: u32 = 100_000;
     const PACKET_LEN: u8 = 25;
     const HEADER: u8 = 0x0F;
-    const FOOTER: u8 = 0x00;
-    // const FOOTER: u8 = 0x04; // S.BUS2 0x04~0x34
-    // const FOOTER_MSK: u8 = 0x0F;
+    const FOOTER_V1: u8 = 0x00;
+    const FOOTER_V2: u8 = 0x04; // S.BUS2 0x04~0x34
+    const FOOTER_V2_MSK: u8 = 0x0F;
 
     pub fn new(
         usart: USART1,
@@ -86,7 +86,7 @@ impl Sbus {
         while self.cur != next_cur {
             match Self::read_buffer(self.cur) {
                 Self::HEADER if next_cur.wrapping_sub(self.cur) < Self::PACKET_LEN => break,
-                Self::HEADER if Self::read_buffer(self.cur.wrapping_add(Self::PACKET_LEN - 1)) == Self::FOOTER => {
+                Self::HEADER if Self::is_footer(Self::read_buffer(self.cur.wrapping_add(Self::PACKET_LEN - 1))) => {
                     latest_cur = Some(self.cur);
                     self.cur = self.cur.wrapping_add(Self::PACKET_LEN);
                 }
@@ -118,6 +118,10 @@ impl Sbus {
                 failsafe: data[22] & 0x08 != 0,
             }
         })
+    }
+
+    fn is_footer(byte: u8) -> bool {
+        (byte == Self::FOOTER_V1) | (byte & Self::FOOTER_V2_MSK == Self::FOOTER_V2)
     }
 
     fn read_buffer(cur: u8) -> u8 {
