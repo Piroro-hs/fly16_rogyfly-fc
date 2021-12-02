@@ -43,13 +43,28 @@ pub struct T10j {
 }
 
 impl T10j {
-    pub fn new(mut sbus: Sbus, delay: &mut impl DelayMs<u16>) -> Self {
-        delay.delay_ms(14);
-        let prev = sbus.latest().unwrap();
-        delay.delay_ms(14);
-        let cur = sbus.latest().unwrap();
+    pub fn new(mut sbus: Sbus, delay: &mut impl DelayMs<u16>) -> Option<Self> {
+        const TIMEOUT_MS: u16 = 1000;
+        const SBUS_INTERVAL_MS: u16 = 14;
+
+        let mut cnt = 0;
+        let mut latest;
+        while {
+            cnt += 1;
+            delay.delay_ms(SBUS_INTERVAL_MS);
+            latest = sbus.latest();
+            (cnt < TIMEOUT_MS / SBUS_INTERVAL_MS) & latest.is_none()
+        } {}
+        let prev = latest?;
+        while {
+            cnt += 1;
+            delay.delay_ms(SBUS_INTERVAL_MS);
+            latest = sbus.latest();
+            (cnt <= TIMEOUT_MS / SBUS_INTERVAL_MS) & latest.is_none()
+        } {}
+        let cur = latest?;
         let trim = (&cur.ch[0..4]).try_into().unwrap();
-        Self { sbus, prev, cur, trim }
+        Some(Self { sbus, prev, cur, trim })
     }
 
     pub fn update(&mut self) {
