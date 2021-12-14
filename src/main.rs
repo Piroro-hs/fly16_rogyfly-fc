@@ -11,6 +11,7 @@ mod t10j;
 use bno055::{Bno055, BNO055OperationMode};
 use cortex_m::asm;
 use cortex_m_rt::entry;
+use lps22hb::{fifo::FIFOConfig, interface::{I2cInterface, i2c::I2cAddress}, LPS22HB};
 #[cfg(not(debug_assertions))]
 use panic_halt as _;
 use stm32f3xx_hal::{self as hal, pac, prelude::*};
@@ -39,6 +40,8 @@ fn main() -> ! {
     let sys_clock = clock::SysClock::new(cp.SYST, clocks);
 
     let mut delay = delay::Delay::new(cp.DWT, cp.DCB, clocks);
+
+    delay.delay_ms(1000);
 
     let mut gpioa = dp.GPIOA.split(&mut rcc.ahb);
     let mut gpiob = dp.GPIOB.split(&mut rcc.ahb);
@@ -96,25 +99,39 @@ fn main() -> ! {
     imu.set_calibration_profile(BNO055Calibration::from_buf(
         &[0xED, 0xFF, 0x0E, 0x00, 0x1E, 0x00, 0xED, 0xFF, 0x0E, 0x00, 0x1E, 0x00, 0xFE, 0xFF, 0x01, 0x00, 0xFF, 0xFF, 0xE8, 0x03, 0x68, 0x03]
     ), &mut delay).unwrap();
+    delay.delay_ms(100);
 
-    let mut barometer = barometer::Barometer::new(bus.acquire_i2c(), &mut delay).unwrap();
+    let mut barometer_o = barometer::Barometer::new(bus.acquire_i2c(), &mut delay, Some(|| unsafe {
+        (*pac::I2C1::ptr()).cr1.modify(|_, w| w.pe().disabled());
+        asm::delay(3 * clocks.ppre1() as u32); // Wait at least 3 APB clock cycles
+        (*pac::I2C1::ptr()).cr1.modify(|_, w| w.pe().enabled());
+    })).unwrap();
+
+    let mut barometer_s = LPS22HB::new(I2cInterface::init(bus.acquire_i2c(), I2cAddress::SA0_VCC));
+    barometer_s.software_reset().unwrap();
+    barometer_s.set_datarate(lps22hb::ODR::_75Hz).unwrap();
+    let fifo_config = FIFOConfig { fifo_mode: lps22hb::FIFO_MODE::Stream, ..Default::default() };
+    barometer_s.enable_fifo(false, fifo_config).unwrap();
+    barometer_s.lowpass_filter(true, true).unwrap();
 
     const SAMPLE_NUM: usize = 10;
-    let acc = (0..SAMPLE_NUM)
+    let (acc_o, acc_s) = (0..SAMPLE_NUM)
         .map(|_| {
-            delay.delay_ms(10);
-            barometer.pressure().unwrap()
+            delay.delay_ms(100);
+            (barometer_o.pressure().unwrap(), barometer_s.read_pressure().unwrap() * 100.0)
         })
         .fold(
-            (0.0, f64::NEG_INFINITY, f64::INFINITY),
-            |(acc, max, min), cur| (acc + cur, max.max(cur), min.min(cur)),
+            ((0.0, f64::NEG_INFINITY, f64::INFINITY), (0.0, f32::NEG_INFINITY, f32::INFINITY)),
+            |(acc_o, acc_s), (cur_o, cur_s)| ((acc_o.0 + cur_o, acc_o.1.max(cur_o), acc_o.2.min(cur_o)), (acc_s.0 + cur_s, acc_s.1.max(cur_s), acc_s.2.min(cur_s))),
         );
-    let pressure_trimmed_mean = (acc.0 - (acc.1 + acc.2)) / (SAMPLE_NUM - 2) as f64;
+    let pressure_mean_o = (acc_o.0 - (acc_o.1 + acc_o.2)) / (SAMPLE_NUM - 2) as f64;
+    let pressure_mean_s = (acc_s.0 - (acc_s.1 + acc_s.2)) / (SAMPLE_NUM - 2) as f32;
 
     delay.delay_ms(1000);
 
     println!("Start");
 
+    let mut cnt = 0;
     loop {
         const SERVO_PWM_OFFSET: u16 = (1.52 / 0.000625 - 1024.0) as u16;
         const AILERON_DIFF_RATIO: f32 = 0.6;
@@ -136,10 +153,18 @@ fn main() -> ! {
         if let Ok(acc) = imu.linear_acceleration() {
             println!("Acceleration: {:?}", acc);
         }
-        if let Ok(pressure) = barometer.pressure() {
-            let altitude = (pressure - pressure_trimmed_mean) * -8.344407986; // https://en.wikipedia.org/wiki/Pressure_altitude
-            println!("Altitude: {:?}", altitude);
+        if if cnt == 0 {
+            if let (Ok(pressure_o), Ok(pressure_s)) = (
+                barometer_o.pressure(),
+                barometer_s.read_pressure(),
+            ) {
+                let altitude_o = (pressure_o - pressure_mean_o) * -8.344407986; // https://en.wikipedia.org/wiki/Pressure_altitude
+                let altitude_s = (pressure_s * 100.0 - pressure_mean_s) * -8.344407986; // https://en.wikipedia.org/wiki/Pressure_altitude
+                let altitude = (a_o as f32 + a_s) / 2.0;
+                println!("Altitude: {:?}", altitude);
+            }
         }
+        cnt = (cnt + 1) % 10;
 
         sys_clock.wait();
     }

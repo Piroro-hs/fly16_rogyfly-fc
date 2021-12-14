@@ -25,11 +25,19 @@ impl<I, E> Barometer<I>
 where
     I: WriteRead<Error = E> + Write<Error = E>,
 {
-    pub fn new(mut i2c: I, delay: &mut impl DelayMs<u16>) -> Result<Self, E> {
+    pub fn new(mut i2c: I, delay: &mut impl DelayMs<u16>, bus_recover: Option<impl FnOnce()>) -> Result<Self, E> {
+        let _ = i2c.write(ADDR, &[0xE0, 0xE6]); // reset, I2C bus will fail
+        delay.delay_ms(10); // Wait 10 ms
+
+        if let Some(bus_recover) = bus_recover {
+            bus_recover();
+        }
+
         i2c.write(ADDR, &[0xF5, 0x00])?; // t_standby 1 ms
-        // i2c.write(ADDR, &[0xF1, 0b0000_0010])?; // IIR filter N = 4
+        // i2c.write(ADDR, &[0xF1, 0b0000_0000])?; // IIR filter OFF
+        i2c.write(ADDR, &[0xF1, 0b0000_0010])?; // IIR filter N = 4
+        // i2c.write(ADDR, &[0xF1, 0b0000_0100])?; // IIR filter N = 16
         // i2c.write(ADDR, &[0xF1, 0b0000_0101])?; // IIR filter N = 32
-        i2c.write(ADDR, &[0xF1, 0b0000_0000])?; // IIR filter OFF
 
         let mut coe = [0_u8; 25];
         i2c.write_read(ADDR, &[0xA0], &mut coe)?;
@@ -59,7 +67,8 @@ where
             1.3E-16 + 7.9E-17 * i16::from_be_bytes(coe[16..18].try_into().unwrap()) as f64 / 32767.0;
         delay.delay_ms(1); // Wait 1 ms
 
-        i2c.write(ADDR, &[0xF4, 0b0010_1111])?; // temp 1, pressure 4, Normal mode
+        // i2c.write(ADDR, &[0xF4, 0b0010_1111])?; // temp 1, pressure 4, Normal mode
+        i2c.write(ADDR, &[0xF4, 0b0111_1011])?; // temp 4, pressure 32, Normal mode
 
         Ok(Self {
             i2c,
