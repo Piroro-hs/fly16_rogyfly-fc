@@ -8,9 +8,10 @@ mod print;
 mod sbus;
 mod t10j;
 
-use bno055::{Bno055, BNO055OperationMode};
+use bno055::{BNO055Calibration, BNO055OperationMode, Bno055};
 use cortex_m::asm;
 use cortex_m_rt::entry;
+use glam::{f32::*, EulerRot};
 use lps22hb::{fifo::FIFOConfig, interface::{I2cInterface, i2c::I2cAddress}, LPS22HB};
 #[cfg(not(debug_assertions))]
 use panic_halt as _;
@@ -127,6 +128,10 @@ fn main() -> ! {
     let pressure_mean_o = (acc_o.0 - (acc_o.1 + acc_o.2)) / (SAMPLE_NUM - 2) as f64;
     let pressure_mean_s = (acc_s.0 - (acc_s.1 + acc_s.2)) / (SAMPLE_NUM - 2) as f32;
 
+    let mut r = util::DumbFilter::new(0.0);
+    let mut p = util::DumbFilter::new(0.0);
+    let mut y = util::DumbFilter::new(0.0);
+
     delay.delay_ms(1000);
 
     println!("Start");
@@ -135,6 +140,8 @@ fn main() -> ! {
     loop {
         const SERVO_PWM_OFFSET: u16 = (1.52 / 0.000625 - 1024.0) as u16;
         const AILERON_DIFF_RATIO: f32 = 0.6;
+
+        let cycle = pac::DWT::get_cycle_count();
 
         t10j.update();
         let state = t10j.state();
@@ -148,12 +155,18 @@ fn main() -> ! {
         rudder.set_duty(state.value(4) + SERVO_PWM_OFFSET);
 
         if let Ok(quat) = imu.quaternion() {
-            println!("Quaternion: {:?}", quat);
+            let (nr, np, ny) = quat_to_euler(quat);
+            r.update(nr);
+            p.update(np);
+            y.update(ny);
+            print!("raw euler: {:4} ", nr.to_degrees() as i32);
+            print!("{:4} ", np.to_degrees() as i32);
+            print!("{:4}, ", ny.to_degrees() as i32);
+            print!("roll: {:4}, ", r.value().to_degrees() as i32);
+            print!("pitch: {:4}, ", p.value().to_degrees() as i32);
+            print!("yaw: {:4}, ", y.value().to_degrees() as i32);
         }
-        if let Ok(acc) = imu.linear_acceleration() {
-            println!("Acceleration: {:?}", acc);
-        }
-        if if cnt == 0 {
+        if cnt % 10 == 0 {
             if let (Ok(pressure_o), Ok(pressure_s)) = (
                 barometer_o.pressure(),
                 barometer_s.read_pressure(),
@@ -164,10 +177,25 @@ fn main() -> ! {
                 println!("Altitude: {:?}", altitude);
             }
         }
-        cnt = (cnt + 1) % 10;
+        cnt += 1;
+        println!("took {} cycles", pac::DWT::get_cycle_count() - cycle);
 
         sys_clock.wait();
     }
+}
+
+fn quat_to_euler(quat: mint::Quaternion<f32>) -> (f32, f32, f32) {
+    let quat = Quat::from(quat);
+    // roll: Y, pitch: X, yaw: Z for BNO055
+    // roll: Z, pitch: X, yaw: Y for glam
+    // let (roll, yaw, pitch) = quat.to_euler(EulerRot::YXZ);
+    // let (pitch, yaw, roll) = quat.to_euler(EulerRot::ZXY);
+    // let (yaw, pitch, roll) = quat.to_euler(EulerRot::XZY);
+    let (roll, pitch, yaw) = quat.to_euler(EulerRot::YZX);
+    let roll = -roll;
+    let pitch = pitch;
+    let yaw = if yaw < 0.0 { yaw + core::f32::consts::PI } else { yaw - core::f32::consts::PI };
+    (roll, pitch, yaw)
 }
 
 #[cfg(debug_assertions)]
