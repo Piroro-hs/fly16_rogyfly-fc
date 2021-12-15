@@ -170,8 +170,8 @@ fn main() -> ! {
                     barometer_o.pressure(),
                     barometer_s.read_pressure(),
                 ) {
-                    let a_o = (pressure_o - pressure_mean_o) * -8.344407986;
-                    let a_s = (pressure_s * 100.0 - pressure_mean_s) * -8.344407986;
+                    let a_o = (pressure_o - pressure_mean_o) * -0.08344407986;
+                    let a_s = (pressure_s * 100.0 - pressure_mean_s) * -0.08344407986;
                     a = (a_o as f32 + a_s) / 2.0;
                 }
             }
@@ -192,15 +192,15 @@ fn main() -> ! {
                     pid_p.reset_integral_term();
                 }
                 let pr = pid_r.next_control_output(r.value()).output;
-                if a - ta > 0.2 {
+                if a - ta > 0.05 {
                     pid_p.setpoint = 0.0;
-                } else if a - ta < -0.2 {
+                } else if a - ta < -0.05 {
                     pid_p.setpoint = core::f32::consts::FRAC_PI_6;
                 }
                 if cnt % 10 == 0 {
                     pp = pid_p.next_control_output(p.value()).output;
-                    if (a - ta < -0.2) & (a < oa) {
-                        pp = (pp + (oa -a) * 0.25).min(1.0);
+                    if (a - ta < -0.05) & (a < oa) {
+                        pp = (pp + (oa - a) * 10.0).min(1.0);
                     }
                     oa = a;
                 }
