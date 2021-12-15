@@ -14,6 +14,7 @@ glam = { version = "0.20.0", default-features = false, features = ["libm", "mint
 lps22hb = "0.1.0"
 mint = "0.5.8"
 panic-halt = "0.2.0"
+pid = "3.0.0"
 shared-bus = "0.2.2"
 stm32f3xx-hal = { version = "0.8.1", features = ["ld", "rt", "stm32f303x8"] }
 

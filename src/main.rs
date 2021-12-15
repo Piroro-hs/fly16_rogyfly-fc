@@ -16,6 +16,7 @@ use glam::{f32::*, EulerRot};
 use lps22hb::{fifo::FIFOConfig, interface::{I2cInterface, i2c::I2cAddress}, LPS22HB};
 #[cfg(not(debug_assertions))]
 use panic_halt as _;
+use pid::Pid;
 use stm32f3xx_hal::{self as hal, pac, prelude::*};
 
 use print::{print, println};
@@ -90,12 +91,10 @@ fn main() -> ! {
 
     let bus = shared_bus::BusManagerSimple::new(i2c);
 
-    // let mut imu = Bno055::new(i2c).with_alternative_address();
     let mut imu = Bno055::new(bus.acquire_i2c());
 
     imu.init(&mut delay).unwrap();
     imu.set_external_crystal(true, &mut delay).unwrap();
-    // imu.set_axis_remap(AxisRemap::builder().swap_x_with(Axis::AXIS_AS_Z).build().unwrap()).unwrap();
     imu.set_mode(BNO055OperationMode::IMU, &mut delay).unwrap();
     delay.delay_ms(100); // BNO055 returns constant zero without this delay
     imu.set_calibration_profile(BNO055Calibration::from_buf(
@@ -133,6 +132,13 @@ fn main() -> ! {
     let mut r = util::DumbFilter::new(0.0);
     let mut p = util::DumbFilter::new(0.0);
     let mut y = util::DumbFilter::new(0.0);
+    let mut a = 0.0f32;
+
+    let mut pid_r = Pid::<f32>::new(1.5, 1.0, 20.0, 1.0, 0.7, 0.3, 1.0, core::f32::consts::FRAC_PI_4);
+    let mut pid_p = Pid::<f32>::new(0.5, 0.1, 50.0, 0.5, 0.3, 0.5, 1.0, core::f32::consts::FRAC_PI_6);
+    let mut ta = 0.0f32;
+    let mut pp = 0.0f32;
+    let mut oa = 0.0f32;
 
     delay.delay_ms(1000);
 
@@ -145,40 +151,79 @@ fn main() -> ! {
 
         let cycle = pac::DWT::get_cycle_count();
 
-        t10j.update();
-        let state = t10j.state();
-        println!("S.BUS: {:?}", state.raw());
-
-        let a = (state.value(1) as i16 - 1024) as f32;
-        aileron_l.set_duty((1024 + (a * if a > 0.0 { 1.0 } else { AILERON_DIFF_RATIO }) as i16) as u16 + SERVO_PWM_OFFSET);
-        aileron_r.set_duty((1024 + (a * if a < 0.0 { 1.0 } else { AILERON_DIFF_RATIO }) as i16) as u16 + SERVO_PWM_OFFSET);
-        elevator.set_duty(state.value(2) + SERVO_PWM_OFFSET);
-        throttle.set_duty((state.value(3) + SERVO_PWM_OFFSET) as u32);
-        rudder.set_duty(state.value(4) + SERVO_PWM_OFFSET);
-
         if let Ok(quat) = imu.quaternion() {
             let (nr, np, ny) = quat_to_euler(quat);
             r.update(nr);
             p.update(np);
             y.update(ny);
-            print!("raw euler: {:4} ", nr.to_degrees() as i32);
-            print!("{:4} ", np.to_degrees() as i32);
-            print!("{:4}, ", ny.to_degrees() as i32);
+            // print!("raw euler: {:4} ", nr.to_degrees() as i32);
+            // print!("{:4} ", np.to_degrees() as i32);
+            // print!("{:4}, ", ny.to_degrees() as i32);
             print!("roll: {:4}, ", r.value().to_degrees() as i32);
             print!("pitch: {:4}, ", p.value().to_degrees() as i32);
             print!("yaw: {:4}, ", y.value().to_degrees() as i32);
-        }
-        if cnt % 10 == 0 {
-            if let (Ok(pressure_o), Ok(pressure_s)) = (
-                barometer_o.pressure(),
-                barometer_s.read_pressure(),
-            ) {
-                let altitude_o = (pressure_o - pressure_mean_o) * -8.344407986; // https://en.wikipedia.org/wiki/Pressure_altitude
-                let altitude_s = (pressure_s * 100.0 - pressure_mean_s) * -8.344407986; // https://en.wikipedia.org/wiki/Pressure_altitude
-                let altitude = (a_o as f32 + a_s) / 2.0;
-                println!("Altitude: {:?}", altitude);
+            // FIXME
+            // let acc = Quat::from_rotation_y(r) * Quat::from_rotation_x(p) * Vec3::from(acc);
+            // let aa = -(acc.to_array()[2] - 9.80665);
+            if cnt % 10 == 0 {
+                if let (Ok(pressure_o), Ok(pressure_s)) = (
+                    barometer_o.pressure(),
+                    barometer_s.read_pressure(),
+                ) {
+                    let a_o = (pressure_o - pressure_mean_o) * -8.344407986;
+                    let a_s = (pressure_s * 100.0 - pressure_mean_s) * -8.344407986;
+                    a = (a_o as f32 + a_s) / 2.0;
+                }
             }
+            // print!("altitude: {:4}, ", a as i32);
         }
+
+        if let Some(t10j) = &mut t10j {
+            t10j.update();
+            let state = t10j.state();
+            // println!("S.BUS: {:?}", state.raw());
+
+            let (a, e, t, r) = if let (true, start) = state.button(6) {
+                if start {
+                    ta = a;
+                    pid_r.next_control_output(r.value());
+                    pid_r.reset_integral_term();
+                    pid_p.next_control_output(p.value());
+                    pid_p.reset_integral_term();
+                }
+                let pr = pid_r.next_control_output(r.value()).output;
+                if a - ta > 0.2 {
+                    pid_p.setpoint = 0.0;
+                } else if a - ta < -0.2 {
+                    pid_p.setpoint = core::f32::consts::FRAC_PI_6;
+                }
+                if cnt % 10 == 0 {
+                    pp = pid_p.next_control_output(p.value()).output;
+                    if (a - ta < -0.2) & (a < oa) {
+                        pp = (pp + (oa -a) * 0.25).min(1.0);
+                    }
+                    oa = a;
+                }
+                let a = 1024.0 * pr * -0.6;
+                let e = t10j.trim(2) as f32 + 1024.0 * pp;
+                let t = 368.0 + 1312.0 * 0.275 + 656.0 * 0.1 * pp; // 0.225~0.325
+                let r = t10j.trim(4) as f32 + 1024.0 * pr;
+                // println!(", pr: {:3}, pp: {:3}", (pr * 100.0) as i32, (pp * 100.0) as i32);
+                (a, e as u16, t as u16, r as u16)
+            } else {
+                // print!("\n");
+                let a = (state.value(1) as i16 - 1024) as f32;
+                (a, state.value(2), state.value(3), state.value(4))
+            };
+            // print!("pwm: {:?}", (a as i16, e, t, r));
+            // FIXME aileron trim
+            aileron_l.set_duty((1024 + (a * if a > 0.0 { 1.0 } else { AILERON_DIFF_RATIO }) as i16) as u16 + SERVO_PWM_OFFSET);
+            aileron_r.set_duty((1024 + (a * if a < 0.0 { 1.0 } else { AILERON_DIFF_RATIO }) as i16) as u16 + SERVO_PWM_OFFSET);
+            elevator.set_duty(e + SERVO_PWM_OFFSET);
+            throttle.set_duty((t + SERVO_PWM_OFFSET) as u32);
+            rudder.set_duty(r + SERVO_PWM_OFFSET);
+        }
+
         cnt += 1;
         println!("took {} cycles", pac::DWT::get_cycle_count() - cycle);
 

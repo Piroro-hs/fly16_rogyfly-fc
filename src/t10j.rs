@@ -27,7 +27,7 @@ impl T10jState<'_> {
         let threshold = Self::SBUS_MAX / position;
         let prev = self.prev.ch[ch - 1] / threshold;
         let cur = self.cur.ch[ch - 1] / threshold;
-        (cur, !(prev == cur))
+        (cur, prev != cur)
     }
 
     pub fn error(&self) -> bool {
