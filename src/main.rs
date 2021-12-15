@@ -7,6 +7,7 @@ mod delay;
 mod print;
 mod sbus;
 mod t10j;
+mod util;
 
 use bno055::{BNO055Calibration, BNO055OperationMode, Bno055};
 use cortex_m::asm;
