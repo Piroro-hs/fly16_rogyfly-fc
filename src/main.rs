@@ -115,6 +115,7 @@ fn main() -> ! {
     barometer_s.enable_fifo(false, fifo_config).unwrap();
     barometer_s.lowpass_filter(true, true).unwrap();
 
+    delay.delay_ms(500);
     const SAMPLE_NUM: usize = 10;
     let (acc_o, acc_s) = (0..SAMPLE_NUM)
         .map(|_| {
