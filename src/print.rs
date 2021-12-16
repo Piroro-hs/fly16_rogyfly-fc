@@ -3,14 +3,15 @@ use core::fmt::{Arguments, Write};
 
 use cortex_m::interrupt::{free, Mutex};
 use stm32f3xx_hal::{
-    gpio::{PushPull, AF7, PB3},
+    gpio::{PushPull, AF7, PA2},
     pac::USART2,
-    serial::Tx,
 };
 
-static TX: Mutex<Cell<Option<Tx<USART2, PB3<AF7<PushPull>>>>>> = Mutex::new(Cell::new(None));
+type Tx = stm32f3xx_hal::serial::Tx<USART2, PA2<AF7<PushPull>>>;
 
-pub fn init(tx: Tx<USART2, PB3<AF7<PushPull>>>) {
+static TX: Mutex<Cell<Option<Tx>>> = Mutex::new(Cell::new(None));
+
+pub fn init(tx: Tx) {
     free(|cs| {
         TX.borrow(cs).set(Some(tx));
     });

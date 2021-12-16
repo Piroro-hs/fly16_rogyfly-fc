@@ -49,12 +49,8 @@ fn main() -> ! {
     let mut gpioa = dp.GPIOA.split(&mut rcc.ahb);
     let mut gpiob = dp.GPIOB.split(&mut rcc.ahb);
 
-    let tx = gpiob
-        .pb3
-        .into_af7_push_pull(&mut gpiob.moder, &mut gpiob.otyper, &mut gpiob.afrl);
-    let rx = gpioa
-        .pa15
-        .into_af7_push_pull(&mut gpioa.moder, &mut gpioa.otyper, &mut gpioa.afrh);
+    let tx = gpioa.pa2.into_af7_push_pull(&mut gpioa.moder, &mut gpioa.otyper, &mut gpioa.afrl);
+    let rx = gpioa.pa3.into_af7_push_pull(&mut gpioa.moder, &mut gpioa.otyper, &mut gpioa.afrl);
     let serial = hal::serial::Serial::new(dp.USART2, (tx, rx), 1_000_000.Bd(), clocks, &mut rcc.apb1);
     let (tx, _) = serial.split();
 
@@ -69,9 +65,9 @@ fn main() -> ! {
     let mut t10j = t10j::T10j::new(sbus, &mut delay);
 
     // Use timers on APB1 to avoid stm32f3xx-hal clock configuration issue
-    let (.., t2c4) = hal::pwm::tim2(dp.TIM2, 16000, 100.Hz(), &clocks);
+    let (t2c1, ..) = hal::pwm::tim2(dp.TIM2, 16000, 100.Hz(), &clocks);
     let (t3c1, t3c2, t3c3, t3c4) = hal::pwm::tim3(dp.TIM3, 16000, 100.Hz(), &clocks);
-    let mut throttle = t2c4.output_to_pa3(gpioa.pa3.into_af1_push_pull(&mut gpioa.moder, &mut gpioa.otyper, &mut gpioa.afrl));
+    let mut throttle = t2c1.output_to_pa5(gpioa.pa5.into_af1_push_pull(&mut gpioa.moder, &mut gpioa.otyper, &mut gpioa.afrl));
     let mut aileron_l = t3c2.output_to_pa4(gpioa.pa4.into_af2_push_pull(&mut gpioa.moder, &mut gpioa.otyper, &mut gpioa.afrl));
     let mut rudder = t3c1.output_to_pa6(gpioa.pa6.into_af2_push_pull(&mut gpioa.moder, &mut gpioa.otyper, &mut gpioa.afrl));
     let mut elevator = t3c3.output_to_pb0(gpiob.pb0.into_af2_push_pull(&mut gpiob.moder, &mut gpiob.otyper, &mut gpiob.afrl));
