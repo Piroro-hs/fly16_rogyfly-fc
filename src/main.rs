@@ -4,6 +4,7 @@
 mod barometer;
 mod clock;
 mod delay;
+mod led;
 mod print;
 mod sbus;
 mod t10j;
@@ -57,6 +58,11 @@ fn main() -> ! {
     print::init(tx);
 
     println!("Hello");
+
+    let red = gpioa.pa12.into_push_pull_output(&mut gpioa.moder, &mut gpioa.otyper);
+    let green = gpioa.pa11.into_push_pull_output(&mut gpioa.moder, &mut gpioa.otyper);
+    let blue = gpioa.pa8.into_push_pull_output(&mut gpioa.moder, &mut gpioa.otyper);
+    let led = led::Led::new(red, green, blue);
 
     let pin = gpioa.pa10.into_af7_push_pull(&mut gpioa.moder, &mut gpioa.otyper, &mut gpioa.afrh);
     let dma1 = dp.DMA1.split(&mut rcc.ahb);
