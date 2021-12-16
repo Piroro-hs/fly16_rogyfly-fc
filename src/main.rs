@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+mod auto_pilot;
 mod barometer;
 mod clock;
 mod delay;
@@ -19,6 +20,7 @@ use panic_halt as _;
 use pid::Pid;
 use stm32f3xx_hal::{self as hal, pac, prelude::*};
 
+use auto_pilot::Direction;
 use print::{print, println};
 
 #[entry]
@@ -130,11 +132,7 @@ fn main() -> ! {
     let mut y = util::DumbFilter::new(0.0);
     let mut a = 0.0f32;
 
-    let mut pid_r = Pid::<f32>::new(1.5, 1.0, 20.0, 1.0, 0.7, 0.3, 1.0, core::f32::consts::FRAC_PI_4);
-    let mut pid_p = Pid::<f32>::new(0.5, 0.1, 50.0, 0.5, 0.3, 0.5, 1.0, core::f32::consts::FRAC_PI_6);
-    let mut ta = 0.0f32;
-    let mut pp = 0.0f32;
-    let mut oa = 0.0f32;
+    let mut pilot = auto_pilot::AutoPilot::new();
 
     delay.delay_ms(1000);
 
@@ -179,35 +177,21 @@ fn main() -> ! {
             let state = t10j.state();
             // println!("S.BUS: {:?}", state.raw());
 
-            let (a, e, t, r) = if let (true, start) = state.button(6) {
-                if start {
-                    ta = a;
-                    pid_r.next_control_output(r.value());
-                    pid_r.reset_integral_term();
-                    pid_p.next_control_output(p.value());
-                    pid_p.reset_integral_term();
+            let (auto_enabled, changed) = state.button(6);
+            let (a, e, t, r) = if auto_enabled {
+                if changed {
+                    pilot.set_mode((Direction::Right, a));
                 }
-                let pr = pid_r.next_control_output(r.value()).output;
-                if a - ta > 0.05 {
-                    pid_p.setpoint = 0.0;
-                } else if a - ta < -0.05 {
-                    pid_p.setpoint = core::f32::consts::FRAC_PI_6;
-                }
-                if cnt % 10 == 0 {
-                    pp = pid_p.next_control_output(p.value()).output;
-                    if (a - ta < -0.05) & (a < oa) {
-                        pp = (pp + (oa - a) * 10.0).min(1.0);
-                    }
-                    oa = a;
-                }
-                let a = 1024.0 * pr * -0.6;
-                let e = t10j.trim(2) as f32 + 1024.0 * pp;
-                let t = 368.0 + 1312.0 * 0.275 + 656.0 * 0.1 * pp; // 0.225~0.325
-                let r = t10j.trim(4) as f32 + 1024.0 * pr;
-                // println!(", pr: {:3}, pp: {:3}", (pr * 100.0) as i32, (pp * 100.0) as i32);
+                let (a, e, t, r) = pilot.control(r.value(), (cnt % 10 == 0).then(|| p.value()), y.value(), a);
+                let a = 1024.0 * a * -0.6;
+                let e = t10j.trim(2) as f32 + 1024.0 * e;
+                let t = 368.0 + 1312.0 * t;
+                let r = t10j.trim(4) as f32 + 1024.0 * r;
                 (a, e as u16, t as u16, r as u16)
             } else {
-                // print!("\n");
+                if changed {
+                    pilot.stop();
+                }
                 let a = (state.value(1) as i16 - 1024) as f32;
                 (a, state.value(2), state.value(3), state.value(4))
             };

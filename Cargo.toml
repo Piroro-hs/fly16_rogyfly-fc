@@ -18,6 +18,9 @@ pid = "3.0.0"
 shared-bus = "0.2.2"
 stm32f3xx-hal = { version = "0.8.1", features = ["ld", "rt", "stm32f303x8"] }
 
+[patch.crates-io]
+pid = { git = "https://github.com/Piroro-hs/pid-rs", rev = "3588c136ffb28d749535f147755a280c6fe0a2eb" }
+
 [profile.dev]
 lto = true
 opt-level = "s"
