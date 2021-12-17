@@ -58,20 +58,26 @@ fn main() -> ! {
 
     println!("Hello");
 
+    let mut ejector = gpioa.pa7.into_push_pull_output(&mut gpioa.moder, &mut gpioa.otyper);
+    let mut ejector_start_cnt = 0;
+
     let pin = gpioa.pa10.into_af7_push_pull(&mut gpioa.moder, &mut gpioa.otyper, &mut gpioa.afrh);
     let dma1 = dp.DMA1.split(&mut rcc.ahb);
     let sbus = sbus::Sbus::new(dp.USART1, pin, dma1.ch5, clocks, &mut rcc.apb2);
 
     let mut t10j = t10j::T10j::new(sbus, &mut delay);
+    if t10j.is_none() {
+        println!("S.BUS signal not found");
+    }
 
     // Use timers on APB1 to avoid stm32f3xx-hal clock configuration issue
     let (t2c1, ..) = hal::pwm::tim2(dp.TIM2, 16000, 100.Hz(), &clocks);
     let (t3c1, t3c2, t3c3, t3c4) = hal::pwm::tim3(dp.TIM3, 16000, 100.Hz(), &clocks);
     let mut throttle = t2c1.output_to_pa5(gpioa.pa5.into_af1_push_pull(&mut gpioa.moder, &mut gpioa.otyper, &mut gpioa.afrl));
-    let mut aileron_l = t3c2.output_to_pa4(gpioa.pa4.into_af2_push_pull(&mut gpioa.moder, &mut gpioa.otyper, &mut gpioa.afrl));
+    let mut aileron_r = t3c2.output_to_pa4(gpioa.pa4.into_af2_push_pull(&mut gpioa.moder, &mut gpioa.otyper, &mut gpioa.afrl));
     let mut rudder = t3c1.output_to_pa6(gpioa.pa6.into_af2_push_pull(&mut gpioa.moder, &mut gpioa.otyper, &mut gpioa.afrl));
     let mut elevator = t3c3.output_to_pb0(gpiob.pb0.into_af2_push_pull(&mut gpiob.moder, &mut gpiob.otyper, &mut gpiob.afrl));
-    let mut aileron_r = t3c4.output_to_pb1(gpiob.pb1.into_af2_push_pull(&mut gpiob.moder, &mut gpiob.otyper, &mut gpiob.afrl));
+    let mut aileron_l = t3c4.output_to_pb1(gpiob.pb1.into_af2_push_pull(&mut gpiob.moder, &mut gpiob.otyper, &mut gpiob.afrl));
 
     aileron_l.enable();
     aileron_r.enable();
@@ -184,6 +190,14 @@ fn main() -> ! {
             let state = t10j.state();
             // println!("S.BUS: {:?}", state.raw());
 
+            if let (true, start) = state.button(5) {
+                // FIXME: duration, double click
+                if start {
+                    ejector.set_high().unwrap();
+                    ejector_start_cnt = cnt;
+                }
+            }
+
             let (a, e, t, r) = if let (true, start) = state.button(6) {
                 if start {
                     ta = a;
@@ -195,7 +209,7 @@ fn main() -> ! {
                 }
                 match state.switch(7, 3) {
                     (0, changed) => {
-                        if changed {
+                        if start | changed {
                             pid_r.setpoint = core::f32::consts::FRAC_PI_4;
                         }
                         let pr = pid_r.next_control_output(r.value()).output;
@@ -211,15 +225,15 @@ fn main() -> ! {
                             }
                             oa = a;
                         }
-                        let a = 1024.0 * pr * -0.6;
+                        let a = 1024.0 * pr * -0.5;
                         let e = t10j.trim(2) as f32 + 1024.0 * pp;
                         let t = 368.0 + 1312.0 * 0.275 + 656.0 * 0.1 * pp; // 0.225~0.325
-                        let r = t10j.trim(4) as f32 + 1024.0 * pr;
+                        let r = t10j.trim(4) as f32 + 1024.0 * pr * 0.6;
                         // println!(", pr: {:3}, pp: {:3}", (pr * 100.0) as i32, (pp * 100.0) as i32);
                         (a, e as u16, t as u16, r as u16)
                     },
                     (1, changed) => {
-                        if changed {
+                        if start | changed {
                             state1 = 0;
                             state2 = 0;
                             state3 = 0;
@@ -259,15 +273,15 @@ fn main() -> ! {
                             }
                             oa = a;
                         }
-                        let a = 1024.0 * pr * -0.6;
+                        let a = 1024.0 * pr * -0.5;
                         let e = t10j.trim(2) as f32 + 1024.0 * pp;
                         let t = 368.0 + 1312.0 * 0.275 + 656.0 * 0.1 * pp; // 0.225~0.325
-                        let r = t10j.trim(4) as f32 + if state1 == 1 { 0.0 } else { 1024.0 * pr };
+                        let r = t10j.trim(4) as f32 + if state1 == 1 { 0.0 } else { 1024.0 * pr * 0.6 };
                         oy = y.value();
                         (a, e as u16, t as u16, r as u16)
                     },
                     (_, changed) => {
-                        if changed {
+                        if start | changed {
                             state1 = 0;
                             state2 = 0;
                             state3 = 0;
@@ -294,10 +308,10 @@ fn main() -> ! {
                             }
                             oa = a;
                         }
-                        let a = 1024.0 * pr * -0.6;
+                        let a = 1024.0 * pr * -0.5;
                         let e = t10j.trim(2) as f32 + 1024.0 * pp;
                         let t = 368.0 + 1312.0 * 0.275 + 656.0 * 0.1 * pp; // 0.225~0.325
-                        let r = t10j.trim(4) as f32 + 1024.0 * pr;
+                        let r = t10j.trim(4) as f32 + 1024.0 * pr * 0.6;
                         oy = y.value();
                         (a, e as u16, t as u16, r as u16)
                     },
@@ -309,11 +323,15 @@ fn main() -> ! {
             };
             // print!("pwm: {:?}", (a as i16, e, t, r));
             // FIXME aileron trim
-            aileron_l.set_duty((1024 + (a * if a > 0.0 { 1.0 } else { AILERON_DIFF_RATIO }) as i16) as u16 + SERVO_PWM_OFFSET);
+            aileron_l.set_duty(2048 - (1024 + (a * if a > 0.0 { 1.0 } else { AILERON_DIFF_RATIO }) as i16) as u16 + SERVO_PWM_OFFSET);
             aileron_r.set_duty((1024 + (a * if a < 0.0 { 1.0 } else { AILERON_DIFF_RATIO }) as i16) as u16 + SERVO_PWM_OFFSET);
-            elevator.set_duty(e + SERVO_PWM_OFFSET);
+            elevator.set_duty(2048 - e + SERVO_PWM_OFFSET);
             throttle.set_duty((t + SERVO_PWM_OFFSET) as u32);
             rudder.set_duty(r + SERVO_PWM_OFFSET);
+        }
+
+        if cnt - ejector_start_cnt > 50 {
+            ejector.set_low().unwrap();
         }
 
         cnt += 1;
