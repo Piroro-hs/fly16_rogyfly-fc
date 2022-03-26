@@ -29,6 +29,7 @@ fn main() -> ! {
     let cp = pac::CorePeripherals::take().unwrap();
     let dp = pac::Peripherals::take().unwrap();
 
+    // クロック設定
     let mut flash = dp.FLASH.constrain();
     let mut rcc = dp.RCC.constrain();
     let clocks = rcc
@@ -41,15 +42,20 @@ fn main() -> ! {
         .pclk2(72.MHz())
         .freeze(&mut flash.acr);
 
+    // 100 HzでSysTick割り込みを発生させる
+    // メインループで処理が終わるとWFI命令で省電力モードに入り、割り込み発生で復帰する
     let sys_clock = clock::SysClock::new(cp.SYST, clocks);
 
+    // DWTのCYCCNTを数えるビジーウェイト
     let mut delay = delay::Delay::new(cp.DWT, cp.DCB, clocks);
 
     delay.delay_ms(1000);
 
+    // GPIOバスの初期化
     let mut gpioa = dp.GPIOA.split(&mut rcc.ahb);
     let mut gpiob = dp.GPIOB.split(&mut rcc.ahb);
 
+    // デバッグ用シリアル
     let tx = gpioa.pa2.into_af7_push_pull(&mut gpioa.moder, &mut gpioa.otyper, &mut gpioa.afrl);
     let rx = gpioa.pa3.into_af7_push_pull(&mut gpioa.moder, &mut gpioa.otyper, &mut gpioa.afrl);
     let serial = hal::serial::Serial::new(dp.USART2, (tx, rx), 1_000_000.Bd(), clocks, &mut rcc.apb1);
@@ -59,14 +65,17 @@ fn main() -> ! {
 
     println!("Hello");
 
+    // 投下装置
     let mut ejector = gpioa.pa7.into_push_pull_output(&mut gpioa.moder, &mut gpioa.otyper);
     let mut ejector_start_cnt = 0;
 
+    // LED
     let red = gpioa.pa11.into_push_pull_output(&mut gpioa.moder, &mut gpioa.otyper);
     let green = gpioa.pa12.into_push_pull_output(&mut gpioa.moder, &mut gpioa.otyper);
     let blue = gpioa.pa8.into_push_pull_output(&mut gpioa.moder, &mut gpioa.otyper);
     let mut led = led::Led::new(red, green, blue);
 
+    // S.BUS（T10Jコントローラ）
     let pin = gpioa.pa10.into_af7_push_pull(&mut gpioa.moder, &mut gpioa.otyper, &mut gpioa.afrh);
     let dma1 = dp.DMA1.split(&mut rcc.ahb);
     let sbus = sbus::Sbus::new(dp.USART1, pin, dma1.ch5, clocks, &mut rcc.apb2);
@@ -78,6 +87,9 @@ fn main() -> ! {
     }
 
     // Use timers on APB1 to avoid stm32f3xx-hal clock configuration issue
+    // サーボ
+    // FIXME: PWM周波数を100Hzにしているのがサーボの寿命が極めて短かった原因か？
+    // 飛行ロボコンで使うような超小型サーボを定格越えの周波数で使うべきではなかった
     let (t2c1, ..) = hal::pwm::tim2(dp.TIM2, 16000, 100.Hz(), &clocks);
     let (t3c1, t3c2, t3c3, t3c4) = hal::pwm::tim3(dp.TIM3, 16000, 100.Hz(), &clocks);
     let mut throttle = t2c1.output_to_pa5(gpioa.pa5.into_af1_push_pull(&mut gpioa.moder, &mut gpioa.otyper, &mut gpioa.afrl));
@@ -92,6 +104,7 @@ fn main() -> ! {
     throttle.enable();
     rudder.enable();
 
+    // I2Cバス
     let mut scl = gpiob.pb6.into_af4_open_drain(&mut gpiob.moder, &mut gpiob.otyper, &mut gpiob.afrl);
     let mut sda = gpiob.pb7.into_af4_open_drain(&mut gpiob.moder, &mut gpiob.otyper, &mut gpiob.afrl);
     scl.internal_pull_up(&mut gpiob.pupdr, true);
@@ -100,6 +113,7 @@ fn main() -> ! {
 
     let bus = shared_bus::BusManagerSimple::new(i2c);
 
+    // BNO055の初期化と設定
     let mut imu = Bno055::new(bus.acquire_i2c());
 
     imu.init(&mut delay).unwrap();
@@ -108,15 +122,17 @@ fn main() -> ! {
     delay.delay_ms(100); // BNO055 returns constant zero without this delay
     imu.set_calibration_profile(BNO055Calibration::from_buf(
         &[0xED, 0xFF, 0x0E, 0x00, 0x1E, 0x00, 0xED, 0xFF, 0x0E, 0x00, 0x1E, 0x00, 0xFE, 0xFF, 0x01, 0x00, 0xFF, 0xFF, 0xE8, 0x03, 0x68, 0x03]
-    ), &mut delay).unwrap();
+    ), &mut delay).unwrap(); // Calibration profile differs for each BNO055 chip
     delay.delay_ms(100);
 
+    // 2SMPB-02Eの初期化と設定
     let mut barometer_o = barometer::Barometer::new(bus.acquire_i2c(), &mut delay, Some(|| unsafe {
         (*pac::I2C1::ptr()).cr1.modify(|_, w| w.pe().disabled());
         asm::delay(3 * clocks.ppre1() as u32); // Wait at least 3 APB clock cycles
         (*pac::I2C1::ptr()).cr1.modify(|_, w| w.pe().enabled());
     })).unwrap();
 
+    // LPS22HBの初期化と設定
     let mut barometer_s = LPS22HB::new(I2cInterface::init(bus.acquire_i2c(), I2cAddress::SA0_VCC));
     barometer_s.software_reset().unwrap();
     barometer_s.set_datarate(lps22hb::ODR::_75Hz).unwrap();
@@ -124,6 +140,7 @@ fn main() -> ! {
     barometer_s.enable_fifo(false, fifo_config).unwrap();
     barometer_s.lowpass_filter(true, true).unwrap();
 
+    // 大気圧を10回測定し最小と最大を除いた平均値を初期値とする
     delay.delay_ms(500);
     const SAMPLE_NUM: usize = 10;
     let (acc_o, acc_s) = (0..SAMPLE_NUM)
@@ -162,7 +179,7 @@ fn main() -> ! {
 
     let mut cnt = 0;
     loop {
-        const SERVO_PWM_OFFSET: u16 = (1.52 / 0.000625 - 1024.0) as u16;
+        const SERVO_PWM_OFFSET: u16 = (1.52 / 0.000625 - 1024.0) as u16; // サーボに入力するパルス幅の中央が1.52 ms、これがS.BUS上で1024にあたり、1変わると0.625 ms変化する
         const AILERON_DIFF_RATIO: f32 = 0.6;
 
         let cycle = pac::DWT::get_cycle_count();
@@ -203,8 +220,8 @@ fn main() -> ! {
                 }
             }
 
-            // 自動旋回
             let (a, e, t, r) = if let (true, start) = state.button(6) {
+                // 自動旋回
                 if start {
                     led.set(Some(led::Color::Blue));
                     ta = a;
@@ -330,6 +347,7 @@ fn main() -> ! {
                     },
                 }
             } else {
+                // 手動操縦
                 led.set(Some(led::Color::Green));
                 // print!("\n");
                 let a = (state.value(1) as i16 - 1024) as f32;
