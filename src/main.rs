@@ -197,8 +197,7 @@ fn main() -> ! {
             // println!("S.BUS: {:?}", state.raw());
 
             if let (true, start) = state.button(5) {
-                // FIXME: duration, double click
-                if start {
+                if start & ejector.is_set_low().unwrap() {
                     ejector.set_high().unwrap();
                     ejector_start_cnt = cnt;
                 }
@@ -336,7 +335,7 @@ fn main() -> ! {
             rudder.set_duty(r + SERVO_PWM_OFFSET);
         }
 
-        if cnt - ejector_start_cnt > 50 {
+        if cnt - ejector_start_cnt > 75 {
             ejector.set_low().unwrap();
         }
 
