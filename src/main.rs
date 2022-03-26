@@ -74,6 +74,7 @@ fn main() -> ! {
     let mut t10j = t10j::T10j::new(sbus, &mut delay);
     if t10j.is_none() {
         println!("S.BUS signal not found");
+        led.blink(led::Color::Red, 2, &mut delay);
     }
 
     // Use timers on APB1 to avoid stm32f3xx-hal clock configuration issue
@@ -137,11 +138,13 @@ fn main() -> ! {
     let pressure_mean_o = (acc_o.0 - (acc_o.1 + acc_o.2)) / (SAMPLE_NUM - 2) as f64;
     let pressure_mean_s = (acc_s.0 - (acc_s.1 + acc_s.2)) / (SAMPLE_NUM - 2) as f32;
 
+    led.set(Some(led::Color::Green));
+
+    // TODO: introduce better state management
     let mut r = util::DumbFilter::new(0.0);
     let mut p = util::DumbFilter::new(0.0);
     let mut y = util::DumbFilter::new(0.0);
     let mut a = 0.0f32;
-
     let mut pid_r = Pid::<f32>::new(1.5, 1.0, 20.0, 1.0, 0.7, 0.3, 1.0, 0.0);
     let mut pid_p = Pid::<f32>::new(0.5, 0.1, 50.0, 0.5, 0.3, 0.5, 1.0, 0.0);
     let mut ta = 0.0f32;
@@ -175,9 +178,6 @@ fn main() -> ! {
             print!("roll: {:4}, ", r.value().to_degrees() as i32);
             print!("pitch: {:4}, ", p.value().to_degrees() as i32);
             print!("yaw: {:4}, ", y.value().to_degrees() as i32);
-            // FIXME
-            // let acc = Quat::from_rotation_y(r) * Quat::from_rotation_x(p) * Vec3::from(acc);
-            // let aa = -(acc.to_array()[2] - 9.80665);
             if cnt % 10 == 0 {
                 if let (Ok(pressure_o), Ok(pressure_s)) = (
                     barometer_o.pressure(),
@@ -203,8 +203,10 @@ fn main() -> ! {
                 }
             }
 
+            // 自動旋回
             let (a, e, t, r) = if let (true, start) = state.button(6) {
                 if start {
+                    led.set(Some(led::Color::Blue));
                     ta = a;
                     sy = y.value();
                     pid_r.next_control_output(r.value());
@@ -213,6 +215,7 @@ fn main() -> ! {
                     pid_p.reset_integral_term();
                 }
                 match state.switch(7, 3) {
+                    // 水平旋回
                     (0, changed) => {
                         if start | changed {
                             pid_r.setpoint = core::f32::consts::FRAC_PI_4;
@@ -225,6 +228,8 @@ fn main() -> ! {
                         }
                         if cnt % 10 == 0 {
                             pp = pid_p.next_control_output(p.value()).output;
+                            // 頭下げ傾向が強いので補正
+                            // FIXME: 本来はPID係数と目標角を調整すべきか
                             if (a - ta < -0.05) & (a < oa) {
                                 pp = (pp + (oa - a) * 10.0).min(1.0);
                             }
@@ -237,6 +242,7 @@ fn main() -> ! {
                         // println!(", pr: {:3}, pp: {:3}", (pr * 100.0) as i32, (pp * 100.0) as i32);
                         (a, e as u16, t as u16, r as u16)
                     },
+                    // 8の字旋回
                     (1, changed) => {
                         if start | changed {
                             state1 = 0;
@@ -258,9 +264,9 @@ fn main() -> ! {
                                 }
                             },
                             1 => {
-                                if cnt > state2 + 100 {
+                                if cnt > state2 + 200 {
                                     state1 = 2;
-                                    pid_r.setpoint = -core::f32::consts::FRAC_PI_4;
+                                    pid_r.setpoint = -core::f32::consts::FRAC_PI_6;
                                 }
                             },
                             _ => {},
@@ -274,6 +280,7 @@ fn main() -> ! {
                         if cnt % 10 == 0 {
                             pp = pid_p.next_control_output(p.value()).output;
                             if (a - ta < -0.05) & (a < oa) {
+                                let ratio = if state1 == 0 { 10.0 } else { 20.0 };
                                 pp = (pp + (oa - a) * 10.0).min(1.0);
                             }
                             oa = a;
@@ -285,12 +292,13 @@ fn main() -> ! {
                         oy = y.value();
                         (a, e as u16, t as u16, r as u16)
                     },
+                    // 上昇旋回
                     (_, changed) => {
                         if start | changed {
                             state1 = 0;
                             state2 = 0;
                             state3 = 0;
-                            pid_r.setpoint = -core::f32::consts::FRAC_PI_4;
+                            pid_r.setpoint = -core::f32::consts::FRAC_PI_6;
                         }
                         // FIXME: broken when sy is around +-pi
                         if (state3 < 2) & (oy > sy) & (y.value() < sy) {
@@ -309,7 +317,7 @@ fn main() -> ! {
                         if cnt % 10 == 0 {
                             pp = pid_p.next_control_output(p.value()).output;
                             if (a - ta < -0.05) & (a < oa) {
-                                pp = (pp + (oa - a) * 10.0).min(1.0);
+                                pp = (pp + (oa - a) * 20.0).min(1.0);
                             }
                             oa = a;
                         }
@@ -322,13 +330,14 @@ fn main() -> ! {
                     },
                 }
             } else {
+                led.set(Some(led::Color::Green));
                 // print!("\n");
                 let a = (state.value(1) as i16 - 1024) as f32;
                 (a, state.value(2), state.value(3), state.value(4))
             };
             // print!("pwm: {:?}", (a as i16, e, t, r));
             // FIXME aileron trim
-            aileron_l.set_duty(2048 - (1024 + (a * if a > 0.0 { 1.0 } else { AILERON_DIFF_RATIO }) as i16) as u16 + SERVO_PWM_OFFSET);
+            aileron_l.set_duty((1024 + (a * if a > 0.0 { 1.0 } else { AILERON_DIFF_RATIO }) as i16) as u16 + SERVO_PWM_OFFSET);
             aileron_r.set_duty((1024 + (a * if a < 0.0 { 1.0 } else { AILERON_DIFF_RATIO }) as i16) as u16 + SERVO_PWM_OFFSET);
             elevator.set_duty(2048 - e + SERVO_PWM_OFFSET);
             throttle.set_duty((t + SERVO_PWM_OFFSET) as u32);
@@ -348,11 +357,8 @@ fn main() -> ! {
 
 fn quat_to_euler(quat: mint::Quaternion<f32>) -> (f32, f32, f32) {
     let quat = Quat::from(quat);
-    // roll: Y, pitch: X, yaw: Z for BNO055
-    // roll: Z, pitch: X, yaw: Y for glam
-    // let (roll, yaw, pitch) = quat.to_euler(EulerRot::YXZ);
-    // let (pitch, yaw, roll) = quat.to_euler(EulerRot::ZXY);
-    // let (yaw, pitch, roll) = quat.to_euler(EulerRot::XZY);
+    // roll: Y, pitch: X, yaw: Z in BNO055
+    // roll: Z, pitch: X, yaw: Y in glam
     let (roll, pitch, yaw) = quat.to_euler(EulerRot::YZX);
     let roll = -roll;
     let pitch = pitch;
