@@ -27,7 +27,12 @@ where
     B: OutputPin<Error = Infallible>,
 {
     pub fn new(red: R, green: G, blue: B) -> Self {
-        Self { red, green, blue, state: None }
+        Self {
+            red,
+            green,
+            blue,
+            state: None,
+        }
     }
 
     pub fn set(&mut self, state: Option<Color>) {

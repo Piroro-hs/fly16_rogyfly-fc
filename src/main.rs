@@ -62,10 +62,10 @@ fn main() -> ! {
     let mut ejector = gpioa.pa7.into_push_pull_output(&mut gpioa.moder, &mut gpioa.otyper);
     let mut ejector_start_cnt = 0;
 
-    let red = gpioa.pa12.into_push_pull_output(&mut gpioa.moder, &mut gpioa.otyper);
-    let green = gpioa.pa11.into_push_pull_output(&mut gpioa.moder, &mut gpioa.otyper);
+    let red = gpioa.pa11.into_push_pull_output(&mut gpioa.moder, &mut gpioa.otyper);
+    let green = gpioa.pa12.into_push_pull_output(&mut gpioa.moder, &mut gpioa.otyper);
     let blue = gpioa.pa8.into_push_pull_output(&mut gpioa.moder, &mut gpioa.otyper);
-    let led = led::Led::new(red, green, blue);
+    let mut led = led::Led::new(red, green, blue);
 
     let pin = gpioa.pa10.into_af7_push_pull(&mut gpioa.moder, &mut gpioa.otyper, &mut gpioa.afrh);
     let dma1 = dp.DMA1.split(&mut rcc.ahb);
